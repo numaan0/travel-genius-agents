@@ -72,19 +72,21 @@ class DatabaseIntegration:
             
             # Insert destination with conflict handling
             insert_dest_query = """
-            INSERT INTO destinations (name, category, description, best_season, avg_temperature, sustainability_rating, hidden_gem)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (name) DO UPDATE SET 
-                category = EXCLUDED.category,
-                description = EXCLUDED.description,
-                sustainability_rating = EXCLUDED.sustainability_rating,
-                hidden_gem = EXCLUDED.hidden_gem,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING id;
-            """
+                INSERT INTO destinations (name, country, category, description, best_season, avg_temperature, sustainability_rating, hidden_gem)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (name) DO UPDATE SET 
+                    country = EXCLUDED.country,
+                    category = EXCLUDED.category,
+                    description = EXCLUDED.description,
+                    sustainability_rating = EXCLUDED.sustainability_rating,
+                    hidden_gem = EXCLUDED.hidden_gem,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING id;
+                """
             
             cursor.execute(insert_dest_query, (
                 dest_info.get("name"),
+                dest_info.get("country", "Unknown"),  # <-- Add this line
                 dest_info.get("category"),
                 dest_info.get("description"),
                 dest_info.get("best_season", "Year-round"),
@@ -123,8 +125,8 @@ class DatabaseIntegration:
             hotels = data.get("hotels", [])
             if hotels:
                 hotel_query = """
-                INSERT INTO hotels (name, location, price_tier, rating, sustainability_score, amenities)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO hotels (name, location, price_tier, rating, sustainability_score, amenities, checkin_date)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT DO NOTHING;
                 """
                 
@@ -135,7 +137,8 @@ class DatabaseIntegration:
                         hotel.get("price_tier", "Upscale"),
                         hotel.get("rating", 4.0),
                         hotel.get("sustainability_score", 7),
-                        hotel.get("amenities", ["WiFi", "Restaurant"])
+                        hotel.get("amenities", ["WiFi", "Restaurant"]),
+                        datetime.now().date()
                     ))
                 
                 self.logger.info(f"✅ Inserted {len(hotels)} hotels")
@@ -166,7 +169,7 @@ class DynamicIngestionService:
             raise ValueError("GOOGLE_MAPS_API_KEY not found in environment variables")
         
         self.weather_api_key = os.getenv('WEATHER_API_KEY')
-        self.toolbox = ToolboxSyncClient("http://127.0.0.1:5000")
+        self.toolbox = ToolboxSyncClient(os.getenv('MCP_TOOLBOX_URL'))
         self.db_integration = DatabaseIntegration()
         
         self.logger = logging.getLogger("DynamicIngestion")
@@ -252,6 +255,7 @@ class DynamicIngestionService:
             
             return {
                 "name": destination,
+                "country": self._extract_country(place.get('formattedAddress', '')) or "Unknown",
                 "display_name": place.get('displayName', {}).get('text', destination),
                 "coordinates": {
                     "lat": place['location']['latitude'],
@@ -272,6 +276,14 @@ class DynamicIngestionService:
         except Exception as e:
             self.logger.error(f"Failed to search destination with NEW API: {e}")
             return None
+        
+    def _extract_country(self, formatted_address: str) -> Optional[str]:
+        """Extract country from formatted address (simple heuristic)"""
+        if formatted_address:
+            parts = formatted_address.split(',')
+            if parts:
+                return parts[-1].strip()
+        return None
 
     async def _discover_activities_new_api(self, coordinates: Dict[str, float]) -> List[Dict[str, Any]]:
         """Discover activities using NEW Places API Nearby Search"""

@@ -1,114 +1,46 @@
+# agent.py - Main file with all agents and tool registration
+import asyncio
+import json
 import sys
 import os
 from dotenv import load_dotenv
+import nest_asyncio
 
+nest_asyncio.apply()
 load_dotenv()
+
 # Add project root to Python path
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
+from datetime import datetime, timedelta
 from typing import Dict, Any, List
-
-
-
-
 from google.adk.agents import Agent
 from toolbox_core import ToolboxSyncClient
 
+# Import all your FunctionTools
+from tools.weather_tools import weather_function_tools
+from tools.destination_tools import destination_function_tools  
+from tools.itinerary_tools import itinerary_function_tools
+from tools.common_tools import common_function_tools
 
-
-from services.dynamic_ingestion_service import ingestion_service
-
-# Add this method to your Travel Genius Orchestrator
-async def handle_missing_destination_discovery(self, destination: str) -> str:
-    """Handle discovery of new destinations"""
-    
-    print(f"🔍 I don't have comprehensive data for {destination} yet.")
-    print("🚀 Let me discover amazing places there for you...")
-    
-    # Trigger discovery
-    discovery_result = await ingestion_service.discover_missing_destination(destination)
-    
-    if discovery_result["success"]:
-        activities_count = discovery_result.get("activities_found", 0)
-        hotels_count = discovery_result.get("hotels_found", 0)
-        
-        return f"""
-        ✅ Fantastic! I've just discovered {destination} and added it to my knowledge base!
-        
-        📊 Here's what I found:
-        • {activities_count} amazing activities and attractions
-        • {hotels_count} accommodation options
-        • Weather and seasonal information
-        • Sustainability ratings for eco-conscious travel
-        
-        🎯 Now I can create a personalized itinerary for you! What's your travel style and budget?
-        """
-    else:
-        return f"""
-        😅 I had some trouble gathering comprehensive data for {destination}. 
-        This might be because it's a very remote location or the name needs to be more specific.
-        
-        💡 Could you try:
-        • Adding the country name (e.g., "Faroe Islands, Denmark")  
-        • Using a nearby major city
-        • Or choosing from these amazing destinations I know well: Mumbai, Delhi, Goa, Rajasthan, Kerala, Bangalore
-        """
-
-# Update your main travel planning logic
-async def generate_complete_itinerary(self, user_request: Dict[str, Any]) -> Dict[str, Any]:
-    destination = user_request.get("destination", "").strip()
-    
-    # First, try to search existing database
-    existing_data = await self.search_destinations_by_personality.arun(
-        personality_type="cultural",  # Default search
-        season=""
-    )
-    
-    # Check if destination exists in results
-    destination_found = any(
-        dest.get('name', '').lower() == destination.lower() 
-        for dest in existing_data
-    )
-    
-    if not destination_found:
-        # 🚀 TRIGGER DYNAMIC DISCOVERY
-        discovery_response = await self.handle_missing_destination_discovery(destination)
-        return {
-            "type": "discovery_in_progress",
-            "message": discovery_response,
-            "next_action": "retry_planning"
-        }
-    
-    # Continue with normal itinerary generation
-    return await self.process_normal_itinerary(user_request)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Connect to your MCP Toolbox server
+# Connect to MCP Toolbox server
 toolbox_url = os.getenv("MCP_TOOLBOX_URL", "http://127.0.0.1:5000")
 toolbox = ToolboxSyncClient(toolbox_url)
+print("Connection successful!")
 
-# Load your travel intelligence tools
+# Load travel intelligence tools
 travel_tools = toolbox.load_toolset('travel_genius_toolset')
 
-# 🎭 PERSONALITY ANALYSIS AGENT
+# Combine all tools
+all_tools = (travel_tools + weather_function_tools + destination_function_tools + 
+             itinerary_function_tools + common_function_tools)
+
+# PERSONALITY ANALYSIS AGENT
 personality_agent = Agent(
     name="personality_analyzer",
     model="gemini-2.0-flash",
-    description="Analyzes user personality quiz results and travel preferences",
+    description="Analyzes user personality quiz results and travel preferences with weather awareness",
     instruction="""
     You are a travel psychology expert who analyzes user quiz responses to determine their travel personality type.
     
@@ -119,25 +51,22 @@ personality_agent = Agent(
     - PARTY: Enjoys nightlife, social experiences, vibrant cities, entertainment venues
     - LUXURY: Prefers premium experiences, comfort, exclusive services, high-end accommodations
     
-    Your Analysis Should Include:
-    1. Primary personality type (strongest match)
-    2. Secondary traits (mix of other types)
-    3. Specific travel preferences derived from responses
-    4. Budget allocation recommendations based on personality
-    5. Destination type suggestions
+    Weather Considerations:
+    - For ADVENTURE personalities: Emphasize good weather days for outdoor activities
+    - For CULTURAL personalities: Mix indoor/outdoor based on weather
+    - For HERITAGE personalities: Indoor alternatives during poor weather
     
-    Always use the search-destinations-by-personality tool to validate your recommendations with real data.
-    
-    Be conversational and explain your reasoning clearly to help users understand their travel style.
+    Use the available tools to check destination data and weather conditions.
+    Always consider seasonal weather patterns when making recommendations.
     """,
-    tools=travel_tools
+    tools=all_tools
 )
 
-# 💰 BUDGET OPTIMIZATION AGENT  
+# BUDGET OPTIMIZATION AGENT
 budget_agent = Agent(
     name="budget_optimizer",
     model="gemini-2.0-flash", 
-    description="Optimizes budget allocation across travel components with real cost data",
+    description="Optimizes budget allocation with weather-aware contingency planning",
     instruction="""
     You are a travel finance expert who creates realistic budget allocations based on personality and destination data.
     
@@ -148,134 +77,313 @@ budget_agent = Agent(
     - PARTY: 35% transport, 30% accommodation, 30% nightlife/entertainment, 5% buffer
     - CULTURAL: 40% transport, 30% accommodation, 25% authentic experiences, 5% buffer
     
-    Your Process:
-    1. Use calculate-trip-budget tool to get destination-specific cost estimates
-    2. Apply personality-based allocation percentages  
-    3. Use search-transport-options and search-hotels-enhanced to validate with real prices
-    4. Adjust recommendations if budget is insufficient
-    5. Suggest cost-saving alternatives while maintaining personality alignment
+    Weather Contingency:
+    - Always allocate 3-5% extra for weather-related changes (indoor alternatives, transport delays)
+    - Suggest flexible bookings during monsoon/winter seasons
+    - Include indoor activity options within the cultural/entertainment budget
     
-    Always provide detailed budget breakdowns with realistic numbers from the database.
-    Focus on maximizing value within constraints while matching the user's travel style.
+    Use calculate-trip-budget and search-transport-options tools to get accurate cost estimates.
+    Use get_weather_analysis tool to factor in weather-related contingencies.
     """,
-    tools=travel_tools
+    tools=all_tools
 )
 
-# 💎 HIDDEN GEMS DISCOVERY AGENT
+# HIDDEN GEMS DISCOVERY AGENT
 gems_agent = Agent(
     name="gems_discoverer",
     model="gemini-2.0-flash",
-    description="Discovers authentic hidden gems and unique local experiences",
+    description="Discovers authentic hidden gems with weather suitability",
     instruction="""
-    You are a local travel expert and cultural anthropologist who specializes in uncovering authentic, offbeat experiences that most tourists never discover.
+    You are a local travel expert who specializes in uncovering authentic, weather-appropriate experiences.
     
     Your Mission:
     1. Use get-hidden-gems tool to find authentic local experiences
     2. Use search-activities-by-interest to discover unique activities with high sustainability scores
-    3. Prioritize experiences marked as "hidden gems" in the database
-    4. Focus on community-based tourism and local interactions
-    5. Highlight experiences with sustainability scores of 8+ 
+    3. Use get_weather_analysis to consider weather suitability for outdoor vs indoor hidden gems
+    4. Prioritize experiences marked as "hidden gems" in the database
+    5. Focus on community-based tourism and local interactions
     
-    Types of Hidden Gems to Find:
-    - Secret local eateries and family-run restaurants
-    - Traditional artisan workshops and craft experiences
-    - Community festivals and local celebrations
-    - Off-the-beaten-path natural wonders
-    - Authentic cultural immersion opportunities
-    - Local markets and neighborhood experiences
+    Weather Adaptation:
+    - Rainy season: Focus on indoor workshops, covered markets, cultural centers
+    - Hot season: Early morning or evening experiences, shaded locations
+    - Pleasant weather: Outdoor markets, nature walks, rooftop experiences
     
-    Always explain WHY each recommendation is special and how it provides authentic cultural insight.
-    Include practical details like best times to visit, cultural etiquette, and how to respectfully engage with local communities.
+    Always explain why each recommendation suits the weather and season.
     """,
-    tools=travel_tools
+    tools=all_tools
 )
 
-# 🌱 SUSTAINABILITY ADVISOR AGENT
+# SUSTAINABILITY ADVISOR AGENT
 sustainability_agent = Agent(
     name="sustainability_advisor",
     model="gemini-2.0-flash",
-    description="Evaluates and optimizes the environmental impact of travel choices",
+    description="Evaluates environmental impact including weather-related carbon footprint",
     instruction="""
     You are an eco-travel expert focused on sustainable and responsible tourism practices.
     
-    Your Responsibilities:
-    1. Use search-transport-options to compare carbon footprints of different transport modes
-    2. Evaluate hotel sustainability scores using search-hotels-enhanced 
-    3. Recommend activities with high sustainability ratings (8+)
-    4. Calculate total trip carbon footprint
-    5. Suggest eco-friendly alternatives and carbon offset options
+    Available MCP Tools for sustainability analysis:
+    - search-transport-options: Compare carbon footprints of different transport modes
+    - search-hotels-enhanced: Evaluate hotel sustainability scores and ratings
+    - search-activities-by-interest: Find activities with high sustainability ratings (8+)
+    - get-hidden-gems: Discover community-based and sustainable experiences
     
-    Sustainability Priorities:
-    - Favor train/bus over flights when practical (show carbon savings)
-    - Recommend hotels with sustainability scores of 7+
-    - Highlight local, community-based experiences
-    - Suggest longer stays to reduce transport frequency
-    - Promote experiences that support local communities
+    Your Responsibilities:
+    1. Use search_transport_to_destination to compare eco-adjusted carbon footprints
+    2. Prioritize accommodations and activities with high sustainability scores
+    3. Calculate total trip carbon footprint including weather-related adjustments
+    4. Recommend off-peak travel to reduce environmental impact
+    
+    Weather Sustainability Factors:
+    - Use get_weather_analysis to assess seasonal travel patterns and carbon impact
+    - Consider weather-related transport delays and alternative options
+    - Factor in energy consumption of indoor alternatives during extreme weather
+    - Encourage shoulder season travel to reduce overcrowding
     
     Always provide:
-    - Carbon footprint comparisons (e.g., "Train saves 60kg CO2 vs flight")
-    - Eco-certification levels of accommodations
-    - Environmental impact of different choices
-    - Practical tips for reducing travel footprint
+    - Seasonal carbon footprint variations
+    - Weather-resilient sustainable choices  
+    - Climate-conscious timing recommendations
+    - Community-based tourism options from hidden gems
     """,
-    tools=travel_tools
+    tools=all_tools
 )
 
-# 🏨 ACCOMMODATION SPECIALIST AGENT
+# ACCOMMODATION SPECIALIST AGENT
 accommodation_agent = Agent(
     name="accommodation_specialist", 
     model="gemini-2.0-flash",
-    description="Finds perfect accommodations matching personality and budget",
+    description="Finds perfect accommodations with weather-appropriate amenities",
     instruction="""
-    You are an accommodation expert who matches travelers with their ideal places to stay.
+    You are an accommodation expert who matches travelers with weather-appropriate places to stay.
     
-    Your Expertise:
-    1. Use search-hotels-enhanced to find accommodations matching budget and preferences
-    2. Match accommodation types to personality:
-       - HERITAGE: Historic hotels, heritage properties, cultural significance
-       - LUXURY: 5-star properties, premium amenities, high ratings
-       - ADVENTURE: Unique stays, eco-lodges, locations near activities
-       - CULTURAL: Locally-owned properties, authentic architecture
-       - PARTY: Central locations, vibrant neighborhoods, social atmosphere
+    Weather-Aware Selection:
+    - Monsoon season: Properties with covered parking, good drainage, backup power
+    - Summer: Air conditioning, pools, shaded outdoor areas
+    - Winter: Heating, warm amenities, indoor recreation
+    - Year-round: Flexible common areas for weather changes
     
-    Selection Criteria:
-    - Sustainability score alignment with user values
-    - Location convenience for planned activities
-    - Amenity matches (spa, gym, business center, etc.)
-    - Price point within allocated accommodation budget
-    - Guest ratings and recent reviews
+    Use get_weather_analysis tool to understand weather conditions for the travel period.
+    Use search-hotels-enhanced to find accommodations with appropriate amenities.
     
-    Always explain your recommendations with specific reasons why each property suits the traveler's personality and needs.
+    Match accommodation types to personality AND weather:
+    - ADVENTURE + Good weather: Eco-lodges, outdoor-focused properties
+    - ADVENTURE + Poor weather: Properties with indoor activities, gyms
+    - LUXURY: Climate-controlled comfort with weather-resistant amenities
+    
+    Always explain how each property handles different weather conditions.
     """,
-    tools=travel_tools
+    tools=all_tools
 )
 
-# 🎯 MAIN TRAVEL ORCHESTRATOR (Root Agent)
-# In your agent.py, update the Travel Genius agent instruction:
+# WEATHER PLANNER AGENT
+weather_agent = Agent(
+    name="weather_planner",
+    model="gemini-2.0-flash",
+    description="Advanced weather monitoring and dynamic itinerary optimization",
+    instruction="""
+    You are a weather-aware trip optimizer with real-time adaptation capabilities.
+    
+    Your Core Functions:
+    1. Use get_current_weather_report tool to get comprehensive weather forecasts
+    2. Use get_weather_analysis tool to score activities by weather suitability (1-10 scale)
+    3. Use optimize_schedule_for_weather tool to reorganize itinerary for maximum enjoyment
+    4. Provide weather-specific recommendations and alternatives
+    5. Generate weather alerts and contingency plans
+    
+    Optimization Strategy:
+    - Prioritize outdoor activities on high-score weather days (8-10/10)
+    - Schedule indoor cultural activities during poor weather (1-4/10)
+    - Use mixed indoor/outdoor for moderate weather (5-7/10)
+    - Consider time-of-day adjustments (early morning for hot weather)
+    - Maintain personality alignment while adapting to conditions
+    
+    Weather Scoring Criteria:
+    - Outdoor activities: Penalize rain/storms heavily, favor clear/sunny conditions
+    - Indoor activities: Weather-neutral with bonus during poor outdoor conditions
+    - Beach activities: Require sunshine, moderate temperatures, low precipitation
+    - Cultural activities: Flexible but consider comfort factors
+    
+    Always maintain the traveler's personality preferences while optimizing for weather.
+    """,
+    tools=all_tools
+)
+
 travel_genius = Agent(
     name="travel_genius",
     model="gemini-2.0-flash",
-    description="AI-powered travel planner with dynamic destination discovery",
-    instruction="""
-    You are the Travel Genius - an expert AI travel planner with a unique ability to discover new destinations on-demand.
-    
-    When a user asks about a destination you don't have data for:
-    1. Acknowledge you're discovering the destination
-    2. Use the discovery tools to gather comprehensive data
-    3. Inform the user of the successful discovery
-    4. Proceed with detailed itinerary planning
-    
-    Your Discovery Process:
-    - "I notice this destination isn't in my current database"
-    - "Let me discover amazing places there for you..."
-    - "✅ Discovery complete! I've found [X] activities and [Y] hotels"
-    - "Now let me create your personalized itinerary..."
-    
-    Always make discovery feel exciting and valuable to the user.
-    Highlight how the system is learning and expanding for future travelers.
-    """,
-    sub_agents=[personality_agent, budget_agent, gems_agent, sustainability_agent, accommodation_agent],
-    tools=travel_tools
+    description="AI-powered travel planner that returns structured JSON itineraries",
+    instruction="""You are the Travel Genius - an expert AI travel planner who creates detailed itineraries.
+    CRITICAL: You MUST respond with ONLY valid JSON in this exact structure (no additional text, explanations, or markdown) also do not generate only two activities per day, always include 2-4 activities per day based on weather data. Here is the structure:
+
+{
+  "tripTitle": "Weather-Optimized X-Day [Destination] Adventure",
+  "totalEstimatedCost": 50000,
+  "dailyPlans": [
+    {
+      "day": 1,
+      "activities": [
+        {
+          "id": "day1_activity1",
+          "title": "🏖️ Beach Adventure & Water Sports",
+          "description": "Experience thrilling water sports including jet skiing, parasailing, and banana boat rides at the most popular beach",
+          "cost": 2500,
+          "duration": "3-4 hours",
+          "type": "adventure",
+          "timing": "9:00 AM - 1:00 PM",
+          "rating": 4.8
+        },
+        {
+          "id": "day1_activity2",
+          "title": "🍽️ Authentic Local Seafood Experience",
+          "description": "Savor fresh catch of the day at a highly-rated beachfront restaurant with traditional coastal flavors",
+          "cost": 1200,
+          "duration": "1-2 hours",
+          "type": "food",
+          "timing": "1:30 PM - 3:00 PM",
+          "rating": 4.6
+        },
+        {
+          "id": "day1_activity3",
+          "title": "📸 Golden Hour Photography Session",
+          "description": "Capture stunning sunset photos at Instagram-famous viewpoints with panoramic coastal views",
+          "cost": 500,
+          "duration": "2 hours",
+          "type": "instagram",
+          "timing": "6:00 PM - 8:00 PM",
+          "rating": 4.9
+        }
+      ],
+      "weatherSummary": {
+        "condition": "Partly Cloudy",
+        "outdoorScore": 7,
+        "indoorScore": 6,
+        "recommendations": ["Good weather for outdoor activities"]
+      }
+    }
+  ],
+  "weatherOptimized": true,
+  "sustainabilityScore": 8.2,
+  "weatherSummary": {
+    "overallScore": 6.5,
+    "suitableForOutdoor": true,
+    "alerts": [],
+    "recommendations": ["Pack light rain gear", "Best outdoor activities in morning"]
+  },
+  "aiRecommendations": [
+    "Book water sports in advance for better rates",
+    "Try local fish curry - it's a must-have",
+    "Visit sunset points early to secure good spots"
+  ],
+  "instagramSpots": [
+    "Sunset Point Beach",
+    "Lighthouse viewpoint", 
+    "Colorful fishing boats harbor"
+  ],
+  "generatedBy": "AI Travel Genius",
+  "generatedAt": "2025-09-16T01:37:00.000Z"
+}
+
+RULES:
+1. Include 2-4 activities per day with realistic costs in INR
+2. Use weather data from tools to optimize indoor/outdoor activities  
+3. Activity types: "adventure", "food", "cultural", "instagram", "attraction", "transport"
+4. Always include at least one "instagram" type activity
+5. Costs should be realistic for the destination and activity type
+6. Use emojis in titles for visual appeal
+7. Return ONLY the JSON object, no other text whatsoever""",
+    sub_agents=[personality_agent, budget_agent, gems_agent, sustainability_agent, accommodation_agent, weather_agent],
+    tools=all_tools
 )
-# Export the main agent for ADK to use
-root_agent = travel_genius
+
+
+itinerary_assistant = Agent(
+    name="itinerary_assistant",
+    model="gemini-2.0-flash",
+    description="Conversational assistant for itinerary questions and modifications",
+    instruction="""You are a friendly AI Travel Assistant chatbot for AI Travel Genius.
+
+Your role is to help users with questions about their EXISTING travel itinerary in a conversational way.
+
+CAPABILITIES:
+- Answer questions about specific activities, costs, and timings
+- Suggest modifications and alternatives
+- Provide local tips and cultural insights
+- Help with practical travel advice
+- Explain weather considerations
+- Offer budget-friendly alternatives
+
+RESPONSE STYLE:
+- Be conversational, friendly, and enthusiastic
+- Use travel emojis appropriately (🎯, 🏖️, 🍽️, ✈️, 🌟, etc.)
+- Provide specific, actionable advice
+- Keep responses concise but helpful (2-4 sentences max)
+- Always reference the specific itinerary when possible
+
+EXAMPLE JSON RESPONSE
+{
+  "answer": "Great question! 🤔 For Day 2, try the spice-plantation lunch – it’s veggie-friendly and saves about ₹800. 🌿",
+  "day": 2,
+  "activity": "spice-plantation lunch",
+  "emoji": "🌿"
+}
+
+FORMAT RULE:
+--- ALWAYS reply **only** with a valid JSON object having these keys:
+    • answer   (string) – the friendly reply  
+    • day      (integer | null) – day number if relevant  
+    • activity (string | null) – activity name if relevant  
+    • emoji    (string) – a representative emoji
+--- Do **not** wrap the JSON in markdown fences.
+You are NOT generating new itineraries – only helping with existing ones.""",
+    tools=all_tools
+)
+
+travel_genius_router = Agent(
+    name="travel_genius_router",
+    model="gemini-2.0-flash",
+    description="Router that determines whether to generate itineraries or provide chat assistance",
+    instruction="""You are the master router for AI Travel Genius. Your job is to determine the user's intent and route to the appropriate agent.
+
+ROUTING LOGIC:
+1. If user wants to CREATE/GENERATE a NEW itinerary → Route to travel_genius agent
+2. If user has QUESTIONS/MODIFICATIONS about an EXISTING itinerary → Route to itinerary_assistant agent
+3. If user input has Question marks then → Route to itinerary_assistant agent
+INDICATORS for ITINERARY GENERATION (travel_genius):
+- "Create itinerary", "Plan a trip", "Generate itinerary"
+- "X-day trip to [destination]" 
+- Contains budget, duration, destination info for new planning
+- "Plan my vacation", "Create travel plan"
+
+INDICATORS for CHAT ASSISTANCE (itinerary_assistant):
+- Questions about existing activities: "Can you change...", "What about...", "Is there..."
+- Asking for alternatives: "cheaper option", "vegetarian restaurant", "indoor activity"
+- Practical questions: "what to pack", "how to get there", "best time"
+- Modifications: "replace this activity", "suggest different"
+
+OUTPUT INSTRUCTIONS:
+- If routing to travel_genius: Simply pass the query as-is for JSON generation
+- If routing to itinerary_assistant: Pass the query with any provided itinerary context
+
+You do not generate responses yourself - you only route to the appropriate agent.""",
+    sub_agents=[travel_genius, itinerary_assistant],
+    tools=all_tools
+)
+
+# # ROOT AGENT (Single exposed endpoint)
+# travel_genius_router = Agent(
+#     name="travel_genius_router",
+#     model="gemini-2.0-flash",
+#     description="Master coordinator for all travel planning requests",
+#     instruction="""You are the master travel coordinator. Analyze user queries and delegate appropriately:
+    
+#     For NEW itinerary generation → delegate to 'travel_genius' agent
+#     For questions about EXISTING itinerary → delegate to 'itinerary_assistant' agent
+    
+#     Always maintain conversation context and provide helpful responses.""",
+#     sub_agents=[travel_genius, itinerary_assistant],
+#     tools=all_tools
+# )
+
+# EXPORTS FOR ADK API SERVER
+root_agent = travel_genius_router
+__all__ = ['root_agent']

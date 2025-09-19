@@ -6,7 +6,7 @@ async def test_discovery():
     print("🧪 Testing dynamic discovery system...")
     
     # Test with a destination not in your database
-    test_destinations = ["Bhutan", "Faroe Islands", "Madagascar"]
+    test_destinations = ["Punjab"]
     
     for destination in test_destinations:
         print(f"\n{'='*50}")

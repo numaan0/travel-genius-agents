@@ -9,12 +9,12 @@ from typing import Dict, Any, List, Optional
 import googlemaps
 import requests
 from toolbox_core import ToolboxSyncClient
-
+from services.weather_service import weather_service
 class DynamicIngestionService:
     def __init__(self):
         self.gmaps = googlemaps.Client(key=os.getenv('GOOGLE_MAPS_API_KEY'))
         self.weather_api_key = os.getenv('WEATHER_API_KEY')
-        self.toolbox = ToolboxSyncClient("http://127.0.0.1:5000")
+        self.toolbox = ToolboxSyncClient(os.getenv('MCP_TOOLBOX_URL'))
         
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
@@ -50,6 +50,22 @@ class DynamicIngestionService:
             self.logger.error(f"❌ Discovery failed for {destination_name}: {str(e)}")
             return {"success": False, "error": str(e)}
 
+    async def _get_weather_data(self, lat: float, lng: float, destination: str) -> Dict[str, Any]:
+        """Get weather data for destination using centralized weather_service"""
+        try:
+            # Use the destination name for forecast (or use reverse geocoding for city if needed)
+            forecast = weather_service.get_forecast(destination)
+            avg_temp = forecast["forecast"]["forecastday"][0]["day"]["avgtemp_c"]
+            # You can add more logic to determine best_season if needed
+            return {
+                "best_season": "Year-round",  # Or derive from forecast
+                "avg_temp": avg_temp
+            }
+        except Exception as e:
+            self.logger.warning(f"Weather data fetch failed: {e}")
+            return {"best_season": "Year-round", "avg_temp": 25}
+
+
     async def _gather_destination_data(self, destination: str) -> Optional[Dict[str, Any]]:
         """Gather comprehensive data from Google APIs"""
         
@@ -77,8 +93,7 @@ class DynamicIngestionService:
         destination_category = self._classify_destination(place_details.get('types', []))
         
         # Get weather data
-        weather_data = await self._get_weather_data(location['lat'], location['lng'])
-        
+        weather_data = await self._get_weather_data(location['lat'], location['lng'], destination)        
         # Find activities and attractions
         activities = await self._discover_activities(location['lat'], location['lng'], destination)
         
@@ -117,7 +132,7 @@ class DynamicIngestionService:
     async def _discover_activities(self, lat: float, lng: float, destination: str) -> List[Dict[str, Any]]:
         """Discover activities using Google Places API"""
         
-        activity_types = ['tourist_attraction', 'museum', 'amusement_park', 'zoo', 'aquarium', 'park']
+        activity_types = ['tourist_attraction', 'museum', 'amusement_park', 'zoo', 'aquarium', 'park','point_of_interest', 'art_gallery', 'shopping_mall', 'spa', 'stadium','local_event','movie_theater', 'night_club', 'bar', 'casino', 'restaurant']
         activities = []
         
         for activity_type in activity_types:
@@ -222,31 +237,7 @@ class DynamicIngestionService:
         }
         return durations.get(activity_type, 2)
 
-    async def _get_weather_data(self, lat: float, lng: float) -> Dict[str, Any]:
-        """Get weather data for destination"""
-        try:
-            if not self.weather_api_key:
-                return {"best_season": "Year-round", "avg_temp": 25}
-                
-            url = f"http://api.openweathermap.org/data/2.5/weather"
-            params = {
-                "lat": lat,
-                "lon": lng,
-                "appid": self.weather_api_key,
-                "units": "metric"
-            }
-            
-            response = requests.get(url, params=params, timeout=5)
-            data = response.json()
-            
-            return {
-                "best_season": "Year-round",  # Simplified for now
-                "avg_temp": int(data.get('main', {}).get('temp', 25))
-            }
-            
-        except Exception as e:
-            self.logger.warning(f"Weather data fetch failed: {e}")
-            return {"best_season": "Year-round", "avg_temp": 25}
+    
 
     def _generate_description(self, place_details: Dict) -> str:
         """Generate description from place data"""
