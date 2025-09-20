@@ -1,3 +1,4 @@
+from google.adk.agents.llm_agent import Agent
 # agent.py - Main file with all agents and tool registration
 import asyncio
 import json
@@ -15,7 +16,7 @@ sys.path.insert(0, project_root)
 
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
-from google.adk.agents import Agent
+# from google.adk.agents import Agent
 from toolbox_core import ToolboxSyncClient
 
 # Import all your FunctionTools
@@ -385,5 +386,5 @@ You do not generate responses yourself - you only route to the appropriate agent
 # )
 
 # EXPORTS FOR ADK API SERVER
+
 root_agent = travel_genius_router
-__all__ = ['root_agent']
